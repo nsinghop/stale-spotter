@@ -2,6 +2,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { githubAPI } from '@/lib/github-api';
 import { Timeline } from '@/components/Timeline';
+import { IssueTimeline } from '@/components/IssueTimeline';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -18,9 +19,13 @@ import {
   Calendar,
   MessageSquare,
   Loader2,
+  Activity,
+  Zap,
+  Brain,
 } from 'lucide-react';
 import { format, formatDistanceToNow } from 'date-fns';
 import { motion } from 'framer-motion';
+import { analyzeIssue, getActivityStatus } from '@/lib/issue-analytics';
 
 export default function IssueDetail() {
   const { owner, repo, number } = useParams();
@@ -42,6 +47,18 @@ export default function IssueDetail() {
     },
     enabled: !!owner && !!repo && !!number,
   });
+
+  const { data: analysis } = useQuery({
+    queryKey: ['issue-analysis-detail', issue?.id],
+    queryFn: async () => {
+      if (!issue?.assignee || issue.state === 'closed') return null;
+      return await analyzeIssue(issue, { contributions: 0 }, { avgTimeToClose: 7, openIssues: 10 });
+    },
+    enabled: !!issue?.assignee && issue?.state === 'open',
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const activityStatus = issue?.assignee ? getActivityStatus(issue.updated_at) : null;
 
   if (issueLoading) {
     return (
@@ -112,18 +129,55 @@ export default function IssueDetail() {
             </div>
 
             {/* AI Insights */}
-            {isStale && (
-              <Card className="p-6 bg-destructive/5 border-destructive/20">
+            {(isStale || analysis) && (
+              <Card className={`p-6 ${isStale ? 'bg-destructive/5 border-destructive/20' : 'bg-primary/5 border-primary/20'}`}>
                 <div className="flex gap-4">
-                  <AlertCircle className="h-6 w-6 text-destructive flex-shrink-0 mt-1" />
-                  <div>
-                    <h3 className="font-semibold text-lg mb-2">⚠️ Stale Issue Detected</h3>
-                    <p className="text-muted-foreground">
-                      This issue has been assigned to{' '}
-                      <span className="font-semibold">{issue.assignee?.login}</span> but shows no
-                      recent activity ({daysSinceUpdate} days since last update).
-                      {!issue.pull_request && ' No pull request has been linked yet.'}
-                    </p>
+                  <Brain className={`h-6 w-6 flex-shrink-0 mt-1 ${isStale ? 'text-destructive' : 'text-primary'}`} />
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-lg mb-2 flex items-center gap-2">
+                      {isStale ? '⚠️ Stale Issue Detected' : '🧠 AI Analysis'}
+                    </h3>
+                    
+                    {isStale && (
+                      <p className="text-muted-foreground mb-4">
+                        This issue has been assigned to{' '}
+                        <span className="font-semibold">{issue.assignee?.login}</span> but shows no
+                        recent activity ({daysSinceUpdate} days since last update).
+                        {!issue.pull_request && ' No pull request has been linked yet.'}
+                      </p>
+                    )}
+
+                    {analysis && (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="flex items-center gap-2">
+                            <Zap className={`h-4 w-4 ${
+                              analysis.completionProbability > 70 ? 'text-success' :
+                              analysis.completionProbability > 40 ? 'text-warning' :
+                              'text-destructive'
+                            }`} />
+                            <span className="text-sm">
+                              Completion: <span className="font-semibold">{analysis.completionProbability}%</span>
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Clock className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-sm">
+                              ETA: <span className="font-semibold">{analysis.estimatedDays} days</span>
+                            </span>
+                          </div>
+                        </div>
+                        
+                        <div className="pt-2 border-t">
+                          <p className="text-sm text-muted-foreground mb-2">
+                            <span className="font-semibold">Analysis:</span> {analysis.reasoning}
+                          </p>
+                          <p className="text-sm">
+                            <span className="font-semibold">Recommendation:</span> {analysis.recommendation}
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </Card>
@@ -161,15 +215,18 @@ export default function IssueDetail() {
             </Card>
 
             {/* Timeline */}
+            <IssueTimeline issue={issue} />
+            
             {timelineLoading ? (
               <Card className="p-6">
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
               </Card>
-            ) : (
+            ) : timeline && timeline.length > 0 && (
               <Card className="p-6">
-                <Timeline events={timeline || []} />
+                <h3 className="font-semibold mb-4">Detailed Activity</h3>
+                <Timeline events={timeline} />
               </Card>
             )}
           </div>
@@ -198,18 +255,38 @@ export default function IssueDetail() {
                   <span>Assignee</span>
                 </div>
                 {issue.assignee ? (
-                  <a
-                    href={issue.assignee.html_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 hover:text-primary transition-colors"
-                  >
-                    <Avatar className="h-6 w-6">
-                      <AvatarImage src={issue.assignee.avatar_url} alt={issue.assignee.login} />
-                      <AvatarFallback>{issue.assignee.login[0]}</AvatarFallback>
-                    </Avatar>
-                    <span className="text-sm font-medium">{issue.assignee.login}</span>
-                  </a>
+                  <div className="space-y-2">
+                    <a
+                      href={issue.assignee.html_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 hover:text-primary transition-colors"
+                    >
+                      <Avatar className="h-6 w-6 relative">
+                        <AvatarImage src={issue.assignee.avatar_url} alt={issue.assignee.login} />
+                        <AvatarFallback>{issue.assignee.login[0]}</AvatarFallback>
+                        {activityStatus && (
+                          <span 
+                            className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${
+                              activityStatus === 'active' ? 'bg-success' :
+                              activityStatus === 'away' ? 'bg-warning' :
+                              'bg-muted-foreground'
+                            }`}
+                          />
+                        )}
+                      </Avatar>
+                      <div className="flex-1">
+                        <span className="text-sm font-medium block">{issue.assignee.login}</span>
+                        {activityStatus && (
+                          <span className="text-xs text-muted-foreground">
+                            {activityStatus === 'active' ? '🟢 Active' :
+                             activityStatus === 'away' ? '🟡 Away' :
+                             '⚫ Offline'}
+                          </span>
+                        )}
+                      </div>
+                    </a>
+                  </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">No one assigned</p>
                 )}

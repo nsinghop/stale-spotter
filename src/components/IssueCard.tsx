@@ -2,10 +2,13 @@ import { GitHubIssue } from '@/lib/github-api';
 import { Badge } from './ui/badge';
 import { Card } from './ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
-import { Clock, MessageCircle, AlertCircle, CheckCircle2, GitPullRequest } from 'lucide-react';
+import { Clock, MessageCircle, AlertCircle, CheckCircle2, GitPullRequest, Activity, Zap } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
+import { getActivityStatus } from '@/lib/issue-analytics';
+import { useQuery } from '@tanstack/react-query';
+import { analyzeIssue } from '@/lib/issue-analytics';
 
 interface IssueCardProps {
   issue: GitHubIssue;
@@ -15,6 +18,18 @@ interface IssueCardProps {
 }
 
 export const IssueCard = ({ issue, repoOwner, repoName, index }: IssueCardProps) => {
+  const activityStatus = issue.assignee ? getActivityStatus(issue.updated_at) : null;
+  
+  const { data: analysis } = useQuery({
+    queryKey: ['issue-analysis', issue.id],
+    queryFn: async () => {
+      if (!issue.assignee || issue.state === 'closed') return null;
+      return await analyzeIssue(issue, { contributions: 0 }, { avgTimeToClose: 7, openIssues: 10 });
+    },
+    enabled: !!issue.assignee && issue.state === 'open',
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
+
   const getStatusBadge = () => {
     if (issue.pull_request) {
       return (
@@ -105,15 +120,62 @@ export const IssueCard = ({ issue, repoOwner, repoName, index }: IssueCardProps)
               </div>
 
               {issue.assignee && (
-                <div className="flex items-center gap-2 pt-2">
-                  <span className="text-xs text-muted-foreground">Assigned to:</span>
-                  <div className="flex items-center gap-1.5">
-                    <Avatar className="h-5 w-5">
-                      <AvatarImage src={issue.assignee.avatar_url} alt={issue.assignee.login} />
-                      <AvatarFallback>{issue.assignee.login[0]}</AvatarFallback>
-                    </Avatar>
-                    <span className="text-sm font-medium">{issue.assignee.login}</span>
+                <div className="space-y-2 pt-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Assigned to:</span>
+                    <div className="flex items-center gap-1.5">
+                      <Avatar className="h-5 w-5 relative">
+                        <AvatarImage src={issue.assignee.avatar_url} alt={issue.assignee.login} />
+                        <AvatarFallback>{issue.assignee.login[0]}</AvatarFallback>
+                        {activityStatus && (
+                          <span 
+                            className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${
+                              activityStatus === 'active' ? 'bg-success' :
+                              activityStatus === 'away' ? 'bg-warning' :
+                              'bg-muted-foreground'
+                            }`}
+                          />
+                        )}
+                      </Avatar>
+                      <span className="text-sm font-medium">{issue.assignee.login}</span>
+                      <Badge variant="outline" className="text-xs">
+                        {activityStatus === 'active' ? '🟢 Active' :
+                         activityStatus === 'away' ? '🟡 Away' :
+                         '⚫ Offline'}
+                      </Badge>
+                    </div>
                   </div>
+                  
+                  {analysis && (
+                    <div className="flex items-center gap-3 text-xs">
+                      <div className="flex items-center gap-1">
+                        <Zap className="h-3 w-3 text-warning" />
+                        <span className="text-muted-foreground">
+                          Completion: <span className={`font-semibold ${
+                            analysis.completionProbability > 70 ? 'text-success' :
+                            analysis.completionProbability > 40 ? 'text-warning' :
+                            'text-destructive'
+                          }`}>{analysis.completionProbability}%</span>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Activity className="h-3 w-3" />
+                        <span className="text-muted-foreground">
+                          ETA: {analysis.estimatedDays}d
+                        </span>
+                      </div>
+                      <Badge 
+                        variant={analysis.risk === 'low' ? 'outline' : 'secondary'}
+                        className={`text-xs ${
+                          analysis.risk === 'high' ? 'border-destructive text-destructive' :
+                          analysis.risk === 'medium' ? 'border-warning text-warning' :
+                          'border-success text-success'
+                        }`}
+                      >
+                        {analysis.risk === 'high' ? '⚠️' : analysis.risk === 'medium' ? '⚡' : '✓'} Risk: {analysis.risk}
+                      </Badge>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

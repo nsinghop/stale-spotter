@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { githubAPI, GitHubIssue } from '@/lib/github-api';
 import { IssueCard } from '@/components/IssueCard';
+import { StaleIssuesAlert } from '@/components/StaleIssuesAlert';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -119,6 +120,13 @@ export default function Issues() {
           </div>
         </motion.div>
       )}
+
+      {/* Stale Issues Alert */}
+      <StaleIssuesAlert 
+        issues={staleIssues} 
+        repoOwner={repo.owner} 
+        repoName={repo.name} 
+      />
 
       {/* Filters */}
       <motion.div
